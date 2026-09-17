@@ -57,17 +57,15 @@ request_laadpaal := result if {
 eligibility_failure := reason if {
         not is_department_member("burgerzaken")
         not is_department_member("bestuursbureau")
-        reason := sprintf("%s niet geautoriseerd vanwege afdeling", [voornaam(input.user.display_name)])
+        reason := "Niet geautoriseerd vanwege afdeling"
 } else := reason if {
         not has_any_diploma("laadpalen-management")
-        reason := sprintf("%s niet geautoriseerd vanwege opleiding", [voornaam(input.user.display_name)])
+        reason := "Niet geautoriseerd vanwege opleiding"
 } else := reason if {
         not has_valid_diploma("laadpalen-management")
-        reason := sprintf("%s niet geautoriseerd vanwege verlopen opleiding", [voornaam(input.user.display_name)])
+        reason := "Niet geautoriseerd vanwege verlopen opleiding"
 }
-        
-voornaam(display_name) := split(display_name, " ")[0]
-                
+
 is_department_member(department) if {
         ds.check({
                 "object_type": "department",
@@ -76,8 +74,8 @@ is_department_member(department) if {
                 "subject_type": "user",
                 "subject_id": input.user.id,
         })
-}       
-        
+}
+
 # diploma ids for course_id that the requester actually holds.
 users_diploma_ids(course_id) := {diploma_id |
         some diploma_id in diploma_ids_for_course(course_id)
@@ -90,7 +88,7 @@ users_diploma_ids(course_id) := {diploma_id |
         })
 }
 
-has_any_diploma(course_id) if { 
+has_any_diploma(course_id) if {
         count(users_diploma_ids(course_id)) > 0
 }
 
