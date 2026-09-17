@@ -4,10 +4,18 @@ import rego.v1
 
 # Laadpalen example policy.
 #
-# Two decisions, both requiring department membership AND an unexpired
-# "laadpalen-management" diploma:
-#   - request_laadpaal_citizen:   burgerzaken members may request a laadpaal for a citizen
-#   - request_laadpaal_diplomaat: bestuursbureau members may request a laadpaal for a diplomaat
+# request_laadpaal(resource_context={"postcode": ..., "huisnummer": ...},
+# identity_context=<requester>) returns {"success": bool, "reason": string}.
+#
+# Decision order (first matching reason wins):
+#   1. postcode/huisnummer not in the fixed address list
+#   2. requester not personally eligible for either track (wrong department /
+#      no diploma / expired diploma)
+#   3. requester's eligible track doesn't match the address's track
+#      (citizen-only requester at a diplomatic address, or vice versa)
+#   4. address already has a laadpaal
+#   5. address has no electric vehicle
+#   6. otherwise: toegekend
 #
 # A course carries a `validity` property (an ISO-8601 duration, e.g. "P1Y");
 # a diploma carries a `last_test_date` (RFC3339). A diploma is valid while
@@ -17,19 +25,44 @@ import rego.v1
 # the laadpalen-management course actually uses, this is not a general
 # ISO-8601 duration parser.
 
-default request_laadpaal_citizen = false
+default request_laadpaal := {"success": false, "reason": "Onbekende fout"}
 
-request_laadpaal_citizen if {
-        is_department_member("burgerzaken")
-        has_valid_diploma("laadpalen-management")
+request_laadpaal := result if {
+        not adres_bestaat(input.resource.postcode, input.resource.huisnummer)
+        result := {"success": false, "reason": "Postcode/huisnummer niet gevonden"}
+} else := result if {
+        result := {"success": false, "reason": eligibility_failure}
+} else := result if {
+        adres_diplomatiek(input.resource.postcode, input.resource.huisnummer)
+        not is_department_member("bestuursbureau")
+        result := {"success": false, "reason": "Niet toegekend vanwege diplomatiek kenteken"}
+} else := result if {
+        not adres_diplomatiek(input.resource.postcode, input.resource.huisnummer)
+        not is_department_member("burgerzaken")
+        result := {"success": false, "reason": "Niet toegekend vanwege ontbrekend diplomatiek kenteken op adres"}
+} else := result if {
+        adres_laadpaal_aanwezig(input.resource.postcode, input.resource.huisnummer)
+        result := {"success": false, "reason": "Reeds laadpaal aanwezig"}
+} else := result if {
+        not adres_elektrisch_voertuig(input.resource.postcode, input.resource.huisnummer)
+        result := {"success": false, "reason": "Geen elektrisch voertuig gevonden op adres"}
+} else := {"success": true, "reason": "Toegekend"}
+
+# personal eligibility, independent of address: the reason the requester has
+# no usable track at all, or undefined if they qualify for at least one.
+eligibility_failure := reason if {
+        not is_department_member("burgerzaken")
+        not is_department_member("bestuursbureau")
+        reason := sprintf("%s niet geautoriseerd vanwege afdeling", [voornaam(input.user.display_name)])
+} else := reason if {
+        not has_any_diploma("laadpalen-management")
+        reason := sprintf("%s niet geautoriseerd vanwege opleiding", [voornaam(input.user.display_name)])
+} else := reason if {
+        not has_valid_diploma("laadpalen-management")
+        reason := sprintf("%s niet geautoriseerd vanwege verlopen opleiding", [voornaam(input.user.display_name)])
 }
 
-default request_laadpaal_diplomaat = false
-
-request_laadpaal_diplomaat if {
-        is_department_member("bestuursbureau")
-        has_valid_diploma("laadpalen-management")
-}
+voornaam(display_name) := split(display_name, " ")[0]
 
 is_department_member(department) if {
         ds.check({
@@ -41,10 +74,9 @@ is_department_member(department) if {
         })
 }
 
-# true if the current user holds an unexpired diploma for the given course.
-has_valid_diploma(course_id) if {
+# diploma ids for course_id that the requester actually holds.
+users_diploma_ids(course_id) := {diploma_id |
         some diploma_id in diploma_ids_for_course(course_id)
-
         ds.check({
                 "object_type": "diploma",
                 "object_id": diploma_id,
@@ -52,7 +84,14 @@ has_valid_diploma(course_id) if {
                 "subject_type": "user",
                 "subject_id": input.user.id,
         })
+}
 
+has_any_diploma(course_id) if {
+        count(users_diploma_ids(course_id)) > 0
+}
+
+has_valid_diploma(course_id) if {
+        some diploma_id in users_diploma_ids(course_id)
         diploma_valid(diploma_id, course_id)
 }
 
@@ -86,4 +125,27 @@ years_to_ns(duration) := ns if {
         m := regex.find_all_string_submatch_n(`^P(\d+)Y$`, duration, 1)
         years := to_number(m[0][1])
         ns := years * 365 * 24 * 60 * 60 * 1000000000
+}
+
+adres_id(postcode, huisnummer) := sprintf("%s-%d", [postcode, huisnummer])
+
+adres(postcode, huisnummer) := obj if {
+        obj := ds.object({"object_type": "adres", "object_id": adres_id(postcode, huisnummer)})
+        obj != {}
+}
+
+adres_bestaat(postcode, huisnummer) if {
+        adres(postcode, huisnummer)
+}
+
+adres_diplomatiek(postcode, huisnummer) if {
+        adres(postcode, huisnummer).properties.diplomatiek == true
+}
+
+adres_laadpaal_aanwezig(postcode, huisnummer) if {
+        adres(postcode, huisnummer).properties.laadpaal_aanwezig == true
+}
+
+adres_elektrisch_voertuig(postcode, huisnummer) if {
+        adres(postcode, huisnummer).properties.elektrisch_voertuig == true
 }
