@@ -5,7 +5,11 @@ import rego.v1
 # Laadpalen example policy.
 #
 # request_laadpaal(resource_context={"postcode": ..., "huisnummer": ...},
-# identity_context=<requester>) returns {"success": bool, "reason": string}.
+# identity_context=<requester>) returns an AuthZEN-shaped Decision object:
+# {"decision": bool, "context": {"reason": string}} - "decision" and
+# "context" are the spec's normative fields (openid.github.io/authzen,
+# section 5.5); "reason" is only a convention for a key inside "context",
+# not a top-level field.
 #
 # Decision order (first matching reason wins):
 #   1. postcode/huisnummer not in the fixed address list
@@ -25,28 +29,28 @@ import rego.v1
 # the laadpalen-management course actually uses, this is not a general
 # ISO-8601 duration parser.
 
-default request_laadpaal := {"success": false, "reason": "Onbekende fout"}
+default request_laadpaal := {"decision": false, "context": {"reason": "Onbekende fout"}}
 
 request_laadpaal := result if {
         not adres_bestaat(input.resource.postcode, input.resource.huisnummer)
-        result := {"success": false, "reason": "Postcode/huisnummer niet gevonden"}
+        result := {"decision": false, "context": {"reason": "Postcode/huisnummer niet gevonden"}}
 } else := result if {
-        result := {"success": false, "reason": eligibility_failure}
+        result := {"decision": false, "context": {"reason": eligibility_failure}}
 } else := result if {
         adres_diplomatiek(input.resource.postcode, input.resource.huisnummer)
         not is_department_member("bestuursbureau")
-        result := {"success": false, "reason": "Niet toegekend vanwege diplomatiek kenteken"}
+        result := {"decision": false, "context": {"reason": "Niet toegekend vanwege diplomatiek kenteken"}}
 } else := result if {
         not adres_diplomatiek(input.resource.postcode, input.resource.huisnummer)
         not is_department_member("burgerzaken")
-        result := {"success": false, "reason": "Niet toegekend vanwege ontbrekend diplomatiek kenteken op adres"}
+        result := {"decision": false, "context": {"reason": "Niet toegekend vanwege ontbrekend diplomatiek kenteken op adres"}}
 } else := result if {
         adres_laadpaal_aanwezig(input.resource.postcode, input.resource.huisnummer)
-        result := {"success": false, "reason": "Reeds laadpaal aanwezig"}
+        result := {"decision": false, "context": {"reason": "Reeds laadpaal aanwezig"}}
 } else := result if {
         not adres_elektrisch_voertuig(input.resource.postcode, input.resource.huisnummer)
-        result := {"success": false, "reason": "Geen elektrisch voertuig gevonden op adres"}
-} else := {"success": true, "reason": "Toegekend"}
+        result := {"decision": false, "context": {"reason": "Geen elektrisch voertuig gevonden op adres"}}
+} else := {"decision": true, "context": {"reason": "Toegekend"}}
 
 # personal eligibility, independent of address: the reason the requester has
 # no usable track at all, or undefined if they qualify for at least one.
@@ -61,9 +65,9 @@ eligibility_failure := reason if {
         not has_valid_diploma("laadpalen-management")
         reason := sprintf("%s niet geautoriseerd vanwege verlopen opleiding", [voornaam(input.user.display_name)])
 }
-
+        
 voornaam(display_name) := split(display_name, " ")[0]
-
+                
 is_department_member(department) if {
         ds.check({
                 "object_type": "department",
@@ -72,8 +76,8 @@ is_department_member(department) if {
                 "subject_type": "user",
                 "subject_id": input.user.id,
         })
-}
-
+}       
+        
 # diploma ids for course_id that the requester actually holds.
 users_diploma_ids(course_id) := {diploma_id |
         some diploma_id in diploma_ids_for_course(course_id)
@@ -86,7 +90,7 @@ users_diploma_ids(course_id) := {diploma_id |
         })
 }
 
-has_any_diploma(course_id) if {
+has_any_diploma(course_id) if { 
         count(users_diploma_ids(course_id)) > 0
 }
 
