@@ -1,4 +1,4 @@
-package authz
+package doelbinding.laadpalen
 
 import rego.v1
 
